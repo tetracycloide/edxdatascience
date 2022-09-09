@@ -1,8 +1,70 @@
+##########################################################
+# Create test set, validation set (final hold-out test set)
+##########################################################
 
+# Note: this process could take a couple of minutes
 
+# record start time
+started.at=proc.time()
+# install packages if required
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(tinytex)) install.packages("tinytex", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("tinytex", repos = "http://cran.us.r-project.org")
 
+# open libraries
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(data.table)
+library(tinytex)
+library(dplyr)
 
+# Video Game Sales with Ratings data set:
+# https://www.kaggle.com/datasets/rush4ratio/video-game-sales-with-ratings
+# unzipped csv file Video_Games_Sales_as_at_22_Dec_2016.csv on github
+# Repo: https://github.com/tetracycloide/edxdatascience
+# files for the CYO project are stored in the CYO VGS 2016 directory
 dl <- tempfile()
-download.file("https://storage.googleapis.com/kaggle-data-sets/576/1146/bundle/archive.zip?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=gcp-kaggle-com%40kaggle-161607.iam.gserviceaccount.com%2F20220909%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20220909T141248Z&X-Goog-Expires=259200&X-Goog-SignedHeaders=host&X-Goog-Signature=01fa87eaa753b37df2456697535bdf49c0565fdccd2247c9ad04b46af518847ebf3e674901ed4a51d309ddffb3eb2dfa7b71ab295a6152e1aaa14cabc3b4d29a6b4986bd061f9f80f5bd80944107fd89f9903921d554e80f769b9703e5f70fc38cb83ee6d94a978386dc8c98b32784beae83aa10ed6cb0d01702dcf868eaac52156aa5e7f9cc6fadc9301e1a03a14723628760262fe191dddcfd3802c5bc6c996292b4222a6c688bddb000f7d88bc478adb857171ed39f5f65fbd07f63c1052345f1f4b2923bc89f84db7be9cf40bd09fa2f61de4149abdfcb38081bb983d0a4ec2f90d91eb7408896affdfce3a89f07fa5a883e2255aa90e086396332ecc7aa",dl)
-
-VGS_2016 <- read.csv(unzip(dl, "/Video_Games_Sales_as_at_22_Dec_2016.csv"))
+download.file("https://github.com/tetracycloide/edxdatascience/blob/main/CYO%20VGS%202016/Video_Games_Sales_as_at_22_Dec_2016.csv", dl)
+vgs <- fread("Video_Games_Sales_as_at_22_Dec_2016.csv")
+# explore the created data frame
+str(vgs)
+# some fields are blank and some nas are present.  User_Score is stored as a chr but should be a number
+# counts of blanks by column
+sapply(vgs, function(y) sum(is.na(y)))
+# looks like some blanks are being stored as blank rather than na lets fix our import to read blank strings as NAs
+vgs <- read.csv("Video_Games_Sales_as_at_22_Dec_2016.csv", na.strings = c("", "NA"))
+# and recheck counts
+sapply(vgs, function(y) sum(is.na(y)))
+# User_Score is stored as character let us explore
+unique(vgs$User_Score)
+# looks like some NAs but mostly 0-10 scores with a decimal
+# Comparing with Critic_Score
+unique(vgs$Critic_Score)
+# 0-100 score here let us convert user score to the same format
+# fix format of user_score multiplying by 10 and using integer to match Critic_Score    
+vgs <- vgs %>% mutate(User_Score = as.integer(as.numeric(User_Score)*10))
+# NAs introduced by coercion but this is a good thing let's check NA counts again
+sapply(vgs, function(y) sum(is.na(y)))
+# now User_Score and User Count match for number of rows with NAs which makes much more sense
+# next we will look at blank developers
+vgs %>% filter(is.na(Developer))
+# many of these entries are quite famous and look to be self published
+# we will assume missing developer fields are self published for our analysis 
+vgs <- vgs %>% mutate(Developer = coalesce(Developer,Publisher))
+# examine ratings values
+unique(vgs$Rating)
+# these match common ESRB ratings but some are missing and some are out of date
+# research here https://en.wikipedia.org/wiki/Entertainment_Software_Rating_Board
+# K-A and E are the same, blanks will be UR
+vgs <- vgs %>% mutate(Rating = coalesce(str_replace(Rating, "K-A", "E"),"UR"))
+# dividing into 4 sets of data for 2 models
+# model 1 to predict Global Sales
+sales_validate
+sales_train
+# model 2 to predict Critic Score
+critic_validate
+critic_train
