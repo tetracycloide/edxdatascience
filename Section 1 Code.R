@@ -495,7 +495,6 @@ compute_s_n <- function(n){
 }
 # Define the vector of n
 n <- 1:25
-
 # Define the vector to store data
 s_n <- vector("numeric", 25)
 for(i in n){
@@ -503,3 +502,37 @@ for(i in n){
 }
 # Check that s_n is identical to the formula given in the instructions.
 identical(s_n,n*(n+1)*(2*n+1)/6)
+
+
+# write a function to get the slope, standard error, and pvalue
+get_slope <- function(data) {
+  fit <- lm(R ~ BB, data = data)
+  sum.fit <- summary(fit)
+  
+  data.frame(slope = sum.fit$coefficients[2, "Estimate"], 
+             se = sum.fit$coefficients[2, "Std. Error"],
+             pvalue = sum.fit$coefficients[2, "Pr(>|t|)"])
+}
+#take the tibble dat and add three new columns the coefficient, se, and p-value for the BB term
+dat %>% 
+  group_by(HR) %>% 
+  do(get_slope(.))
+#create a tibble with league id, HR, BB,and R
+dat <- Teams %>% filter(yearID %in% 1961:2001) %>%
+  mutate(HR = HR/G,
+         R = R/G) %>%
+  select(lgID, HR, BB, R) 
+#check if the relationship between HR and R varies by league
+dat %>% 
+  group_by(lgID) %>% 
+  do(tidy(lm(R ~ HR, data = .), conf.int = T)) %>% 
+  filter(term == "HR") 
+dat %>% 
+  group_by(lgID) %>% 
+  do(glance(lm(R ~ HR, data = .)))
+dat %>% 
+  do(tidy(lm(R ~ HR, data = .), conf.int = T)) %>% 
+  filter(term == "HR")
+dat %>% 
+  group_by(lgID) %>% 
+  do(mod = lm(R ~ HR, data = .))
