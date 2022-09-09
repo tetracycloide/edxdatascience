@@ -1,0 +1,8 @@
+
+
+
+
+dl <- tempfile()
+download.file("https://storage.googleapis.com/kaggle-data-sets/576/1146/bundle/archive.zip?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=gcp-kaggle-com%40kaggle-161607.iam.gserviceaccount.com%2F20220909%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20220909T141248Z&X-Goog-Expires=259200&X-Goog-SignedHeaders=host&X-Goog-Signature=01fa87eaa753b37df2456697535bdf49c0565fdccd2247c9ad04b46af518847ebf3e674901ed4a51d309ddffb3eb2dfa7b71ab295a6152e1aaa14cabc3b4d29a6b4986bd061f9f80f5bd80944107fd89f9903921d554e80f769b9703e5f70fc38cb83ee6d94a978386dc8c98b32784beae83aa10ed6cb0d01702dcf868eaac52156aa5e7f9cc6fadc9301e1a03a14723628760262fe191dddcfd3802c5bc6c996292b4222a6c688bddb000f7d88bc478adb857171ed39f5f65fbd07f63c1052345f1f4b2923bc89f84db7be9cf40bd09fa2f61de4149abdfcb38081bb983d0a4ec2f90d91eb7408896affdfce3a89f07fa5a883e2255aa90e086396332ecc7aa",dl)
+
+VGS_2016 <- read.csv(unzip(dl, "/Video_Games_Sales_as_at_22_Dec_2016.csv"))

@@ -68,10 +68,11 @@ test <- temp %>%
   semi_join(train, by = "movieId") %>%
   semi_join(train, by = "userId")
 
-# Add rows removed from test set back into edx set
+# Add rows removed from test set back into test set
 removed <- anti_join(temp, test)
 train <- rbind(train, removed)
 
+# Remove extra variables
 rm(test_index, temp, removed)
 
 # explore the data
@@ -111,21 +112,21 @@ edx %>%
   summarize(count = n()) %>%
   ggplot(aes(x = rating, y = count)) +
   geom_line()
-# create RMSE funciton to evaluate model results
+# create RMSE function to evaluate model results
 RMSE <- function(true_ratings, predicted_ratings){
   sqrt(mean((true_ratings - predicted_ratings)^2))
 }
-# find average rating in edx set
+# find average rating in train set
 mu_hat <- mean(train$rating)
-# print the average rating from the edx test est
+# print the average rating from the train set
 mu_hat
-# RMSE of guessing average rating against train set
+# RMSE of guessing average rating against test set
 naive_rmse <- RMSE(test$rating, mu_hat)
 # We see that this error is fairly large, more than 1.
 naive_rmse
 # add naive_rmse to a table of rmse results
 rmse_results <- tibble(method = "Just the average", RMSE = naive_rmse)
-# calculate a movie factor, average difference between a movies score and the overall average score
+# calculate a movie factor, average difference between a movies average score and the overall average score
 movie_avgs <- train %>% 
   group_by(movieId) %>% 
   summarize(b_i = mean(rating - mu_hat))
@@ -176,6 +177,8 @@ genre_avgs <- train %>%
   left_join(user_avgs, by='userId') %>%
   group_by(genres) %>%
   summarize(b_g = mean(rating - mu_hat - b_i - b_u))
+# histogram of genre factors
+genre_avgs %>% qplot(b_g, geom ="histogram", bins = 10, data = ., color = I("black"))
 # predictions based on genre, user, and movie effect factors
 predicted_ratings_GEM <- test %>% 
   left_join(movie_avgs, by='movieId') %>%
@@ -196,19 +199,22 @@ edx %>% mutate(date = round_date(as_datetime(timestamp), unit = "week")) %>%
   summarize(rating = mean(rating)) %>%
   ggplot(aes(date, rating)) +
   geom_point() +
-  geom_smooth()
+  geom_smooth() +
+  ylim(3,4.5)
 # there appears to be a small effect
 # explore time difference between movie release and rating
 # check the results of our string match are returning 4 digit years
 unique(mutate(edx, release_year = as.numeric(str_match(title,"\\((\\d{4})\\)$")[,2]))$release_year)
-# plot time since release effects on ratings
+# plot time since release effects on ratings 
+# setting the same y limits to better compare to the previous plot
 edx %>%
   mutate(since_release = year(as_datetime(timestamp))-as.numeric(str_match(title,"\\((\\d{4})\\)$")[,2])) %>%
   group_by(since_release) %>%
   summarize(rating = mean(rating)) %>%
   ggplot(aes(since_release, rating)) +
   geom_point() +
-  geom_smooth()
+  geom_smooth() +
+  ylim(3,4.5)
 # there seems to be a correlation between how old a film is when it is rated and the rating given
 # perhaps people are seeking out older films they already know to be good?
 # what about the negative since release values?
@@ -217,7 +223,7 @@ edx %>%
          release_year = as.numeric(str_match(title,"\\((\\d{4})\\)$")[,2]), 
          since_release = year(as_datetime(timestamp))-as.numeric(str_match(title,"\\((\\d{4})\\)$")[,2])) %>% 
   filter (since_release < 0)
-# these appear genine and there aren't many of them
+# these appear real but there aren't many of them
 # adding since release as a factor in our edx, train, and test sets
 edx <- edx %>% 
   mutate(since_release = year(as_datetime(timestamp))-
@@ -235,6 +241,8 @@ since_release_avgs <- train %>%
   left_join(genre_avgs, by='genres') %>%
   group_by(since_release) %>%
   summarize(b_sr = mean(rating - mu_hat - b_i - b_u - b_g))
+# histogram of since release factor
+since_release_avgs %>% qplot(b_sr, geom ="histogram", bins = 10, data = ., color = I("black"))
 # predictions based on since release, genre, user, and movie effect factors
 predicted_ratings_SREM <- test %>% 
   left_join(movie_avgs, by='movieId') %>%
@@ -249,7 +257,7 @@ model_4_rmse <- RMSE(predicted_ratings_SREM, test$rating)
 rmse_results <- bind_rows(rmse_results,
                           tibble(method="Movie + User + Genre + Since Release Effects Model",  
                                  RMSE = model_4_rmse ))
-# test lambdas for regularization and apply to the model
+# test lambdas for regularization against test set for best RMSE
 lambdas <- seq(0, 10, 0.25)
 rmses <- sapply(lambdas, function(l){
   mu <- mean(train$rating)
@@ -292,32 +300,34 @@ rmse_results <- bind_rows(rmse_results,
 # Check progression of RMSE as models evolve
 rmse_results %>% knitr::kable()
 # add the regularization factor into the models for movie, user, genre, and since release
-movie_avgs <- train %>% 
+# our tuning is complete so here we build the final model on the full edx set
+edx_mu <- mean(edx$rating)
+movie_avgs <- edx %>% 
   group_by(movieId) %>% 
-  summarize(b_i = sum(rating - mu_hat)/(n()+lambda))
-user_avgs <- train %>% 
+  summarize(b_i = sum(rating - edx_mu)/(n()+lambda))
+user_avgs <- edx %>% 
   left_join(movie_avgs, by='movieId') %>%
   group_by(userId) %>%
-  summarize(b_u = sum(rating - mu_hat - b_i)/(n()+lambda))
-genre_avgs <- train %>% 
+  summarize(b_u = sum(rating - edx_mu - b_i)/(n()+lambda))
+genre_avgs <- edx %>% 
   left_join(movie_avgs, by='movieId') %>%
   left_join(user_avgs, by='userId') %>%
   group_by(genres) %>%
-  summarize(b_g = sum(rating - mu_hat - b_i - b_u)/(n()+lambda))
-since_release_avgs <- train %>% 
+  summarize(b_g = sum(rating - edx_mu - b_i - b_u)/(n()+lambda))
+since_release_avgs <- edx %>% 
   left_join(movie_avgs, by='movieId') %>%
   left_join(user_avgs, by='userId') %>%
   left_join(genre_avgs, by='genres') %>%
   group_by(since_release) %>%
-  summarize(b_sr = sum(rating - mu_hat - b_i - b_u - b_g)/(n()+lambda))
-# predict validation set with all 3 factors now including lambda
+  summarize(b_sr = sum(rating - edx_mu - b_i - b_u - b_g)/(n()+lambda))
+# predict validation set with all 4 factors and lambda
 y_hat <- validation %>% 
   mutate(since_release = year(as_datetime(timestamp))-as.numeric(str_match(title,"\\((\\d{4})\\)$")[,2])) %>%
   left_join(movie_avgs, by='movieId') %>%
   left_join(user_avgs, by='userId') %>%
   left_join(genre_avgs, by='genres') %>%
   left_join(since_release_avgs, by='since_release') %>%
-  mutate(pred = mu_hat + b_i + b_u + b_g + b_sr) %>%
+  mutate(pred = edx_mu + b_i + b_u + b_g + b_sr) %>%
   .$pred
 # calculate RMSE of prediction against validation set
 RMSE(validation$rating,y_hat)
@@ -332,5 +342,5 @@ rmse_results <- bind_rows(rmse_results,
 # final RMSE results table
 rmse_results %>% knitr::kable()
 
-# time taken
+# time taken typical result on local hardware "00:07:33 elapsed (00:06:14 cpu)"
 timetaken(started.at)
