@@ -27,8 +27,8 @@ library(dplyr)
 # unzipped csv file Video_Games_Sales_as_at_22_Dec_2016.csv on github
 # Repo: https://github.com/tetracycloide/edxdatascience
 # files for the CYO project are stored in the CYO VGS 2016 directory
-dl <- tempfile()
-download.file("https://github.com/tetracycloide/edxdatascience/blob/main/CYO%20VGS%202016/Video_Games_Sales_as_at_22_Dec_2016.csv", dl)
+dl <- getwd()
+download.file("https://github.com/tetracycloide/edxdatascience/blob/main/CYO-VGS2016/Video_Games_Sales_as_at_22_Dec_2016.csv", dl)
 vgs <- fread("Video_Games_Sales_as_at_22_Dec_2016.csv")
 # explore the created data frame
 str(vgs)
