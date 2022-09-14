@@ -61,10 +61,12 @@ unique(vgs$Rating)
 # research here https://en.wikipedia.org/wiki/Entertainment_Software_Rating_Board
 # K-A and E are the same, blanks will be UR
 vgs <- vgs %>% mutate(Rating = coalesce(str_replace(Rating, "K-A", "E"),"UR"))
-# dividing into 4 sets of data for 2 models
+# dividing into 6 sets of data for 2 models
 # model 1 to predict Global Sales
 sales_validate
 sales_train
+sales_cv
 # model 2 to predict Critic Score
 critic_validate
 critic_train
+sales_cv
