@@ -1,0 +1,1153 @@
+---
+title: "Video Game Sales"
+author: "Neill Smith"
+date: "2022-09-20"
+output: pdf_document
+---
+
+```{r setup, echo=FALSE, message = FALSE, warning = FALSE, include = FALSE}
+# install packages if required
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(tinytex)) install.packages("tinytex", repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("tinytex", repos = "http://cran.us.r-project.org")
+if(!require(ggthemes)) install.packages("tinytex", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(digest)) install.packages("digest", repos = "http://cran.us.r-project.org")
+
+# open libraries
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(data.table)
+library(tinytex)
+library(dplyr)
+library(gridExtra)
+library(ggplot2)
+library(ggthemes)
+library(randomForest)
+library(digest)
+
+# Video Game Sales with Ratings data set:
+# https://www.kaggle.com/datasets/rush4ratio/video-game-sales-with-ratings
+# unzipped csv file Video_Games_Sales_as_at_22_Dec_2016.csv on github
+# Repo: https://github.com/tetracycloide/edxdatascience
+# files for the CYO project are stored in the CYO VGS 2016 directory
+# here we inport and convert any blanks or 'NA' strings to NAs while inporting
+vgs <- fread("https://github.com/tetracycloide/edxdatascience/raw/main/CYO-VGS2016/DataSource/Video_Games_Sales_as_at_22_Dec_2016.csv", 
+             na.strings = c("", "NA","N/A","tbd"), stringsAsFactors = TRUE)
+
+
+
+# and the CPI for All items less food and energy: series_id = 'CUUR0000SA0'
+yearly_cpi <- fread("https://download.bls.gov/pub/time.series/cu/cu.data.0.Current") %>%
+  filter(period == 'M13',series_id == 'CUUR0000SA0L1E')
+```
+
+# Introduction - Video Game Sales Project
+
+Video games are a massive worldwide industry. In 2021 the video games industry saw \$191 billion in global sales, thousands of development studios, and hundreds of publishers employing hundreds of thousands of people worldwide. The "Video Game Sales as at 22 Dec 2016" data set from Kaggle contains sales information for video games from 1980 through 2016 as well as several other characteristics of the games including the Developer, Publisher, Platform, Genre, and ESRB Rating. We will dive into this data, clean it up, tease out some valuable insights, build some models with it, and make some predictions. Let us get started.
+
+# Methodology & Analysis
+
+We will use the attributes of our Video Game Sales data set to create two regression models, one linear and one random forest, that attempt to predict Global Sales. Models such as these could be used to green-light new projects, set appropriate levels of funding, and set appropriate sales targets. To evaluate our models we will use a root mean squared error (RMSE) loss function. We will use cross-validation to evaluate factors for use in each model and adjust tuning parameters. Our final result will be evaluated against a hold-out set and the performance of the two models will be compared.
+
+## Data Exploration, Cleaning, & Visualization
+
+We begin by exploring each attribute in the data set in detail, making corrections where necessary to make more accurate predictions, and examine some underlying trends with insightful visualizations.
+
+### Exploration & Cleaning
+
+We begin with a check of the table structure and a basic quality assessment for missing data.
+
+```{r exploration and cleaning, echo=FALSE}
+# explore the created data frame
+str(vgs)
+```
+
+The data is organized into 16 variables:
+
+1.  Name - Name of the game.
+2.  Platform - Console on which the game is running e.g. Playstation, Xbox, PC, etc.
+3.  Year_of_Release - Year the game was released.
+4.  Genre - Game's category.
+5.  Publisher - The Publisher of the game.
+6.  NA_Sales - Game sales in North America (in millions of units).
+7.  EU_Sales - Game sales in the European Union (in millions of units).
+8.  JP_Sales - Game sales in Japan (in millions of units).
+9.  Other_Sales - Game sales in the rest of the world, i.e. Africa, Asia excluding Japan, Australia, Europe excluding the E.U. and South America (in millions of units).
+10. Global_Sales - Total sales in the world (in millions of units).
+11. Critic_Score - Aggregate score compiled by Metacritic.
+12. Critic_Count - The number of critics used in the Critic_Score.
+13. User_Score - Score by Metacritic's subscribers.
+14. User_Count - The number of users who gave the User_Score.
+15. Developer - Party responsible for creating the game.
+16. Rating - The ESRB ratings.
+
+```{r check na, echo=FALSE}
+# check na counts by column
+data.frame(sapply(vgs, function(y) sum(is.na(y)))) %>%
+    filter(sapply.vgs..function.y..sum.is.na.y...>0) %>%
+    rename("#_of_NAs" = "sapply.vgs..function.y..sum.is.na.y...") %>%
+    knitr::kable()
+```
+
+Checking for missing data we see mostly missing values for Scores and Counts, Developer, and Rating with a handful of missing release years, publishers, and even a couple missing names. Let us explore the blank names first.
+
+```{r name clean, echo=FALSE}
+# Blank names jumps out first as anomalous
+vgs %>% filter(is.na(Name)) %>% select(Name,Developer,Publisher,Genre,Year_of_Release,Rating) %>% knitr::kable()
+# no ratings or scores or genre either and only 2 data points we will discard them
+vgs <- vgs %>% filter(!is.na(Name))
+```
+
+Not a lot of information here, in addition to the missing names several other fields are also blank: Developer, Genre, and Rating. There are to many missing fields for this data to be useful and there are only 2 such occurrences so we will discard it.
+
+Next we will check the missing Year of Release fields:
+
+```{r year check, echo=FALSE}
+# check for anomalous years
+unique(vgs$Year_of_Release)
+# blank years will interfere with later analysis
+vgs %>% filter(is.na(Year_of_Release)) %>% top_n(6,Name) %>% select(Name,Year_of_Release,Global_Sales) %>% knitr::kable()
+```
+
+Here we can see the list of unique years in the data set along side some examples of titles that are missing year of release values. One value jumps out here, *WWE Smackdown vs. Raw 2006,* because it is missing a release year but appears to be a title released on a annual basis with each year in the title itself. We can extract such years and use them to fill in some of our missing year data. Let's try to find more examples.
+
+```{r year fill, echo=FALSE}
+# some titles have years from yearly release series
+vgs %>% filter(is.na(Year_of_Release), str_detect(Name,"(\\d{4})")) %>% select(Name,Year_of_Release) %>% knitr::kable()
+# in this case these look like release years we can borrow
+# we can use these to fill the Year of Release field where available
+vgs <- vgs %>% 
+  mutate(Year_of_Release = coalesce(Year_of_Release,as.integer(str_extract(Name,"(\\d{4})")))) %>%
+  filter(!is.na(Year_of_Release))
+```
+
+Here we can see a list of examples of other titles where the year is in the title itself or included in parenthesis to differentiate titles with the same name by their year of release such as *Tomb Raider (2013).* We will extract these year values in the title and use them as our year of release and discard the rest.
+
+Some other years in our list that seem strange for a 2016 data set are years greater than 2017:
+
+```{r year clean, echo=FALSE}
+# 2017-2020 release years are suspect, data set is from 2016.  Pre-release listings?
+vgs %>% filter(Year_of_Release > 2016) %>%  select(Name,Year_of_Release) %>% knitr::kable()
+# data for these release years insufficent to be included
+vgs <- vgs %>% filter(Year_of_Release <= 2016)
+```
+
+These may be pre-release listings for titles that were slated to come out at the time the data was gathered but had not yet released. We will discard them from our data set.
+
+Next we examine missing Publishers:
+
+```{r publisher check, echo=FALSE}
+# explore missing publishers
+vgs %>% filter(is.na(Publisher)) %>% head(10) %>% select(Name) %>% knitr::kable()
+```
+
+Same of these appear to be legitimate games we may want to include but many are anthologies of Video Volumes or special edition releases of other titles and not useful for our model. We will replace missing Publishers with the Developer, assuming those titles to be self published, and discard the rest.
+
+```{r publisher clean, echo=FALSE}
+# we will assume missing publisher fields are self published for our analysis 
+vgs <- vgs %>% mutate(Publisher = coalesce(Publisher, Developer))
+# looks like anthologies and videos mostly we will discard
+vgs <- vgs %>% filter(!is.na(Publisher))
+```
+
+Examining User Scores and Critic Scores:
+
+```{r score comparison, echo=FALSE}
+# User_Score and Critic_score seem similar but are stored differently let's explor
+unique(vgs$User_Score)
+# l0-10 scores with precision of 0.1
+# Comparing with Critic_Score
+unique(vgs$Critic_Score)
+# 0-100 score here let us convert user score to the same format
+```
+
+Critic Scores are on a 0-100 scale with only whole numbers while User Scores are 0-10 with 1 decimal place. So effectively the same scale if we multiply User Scores by 10. We will make the adjustment. Many Scores are also missing but we do not plan to use scores in our final models. Scores could probably give us some measure of predictive power however these scores are only available after a game has been finished and we are more interested in modeling predictions earlier in the process before these scores would be available.
+
+```{r score clean, echo=FALSE}
+# fix format of user_score multiplying by 10 and using integer to match Critic_Score    
+vgs <- vgs %>% mutate(User_Score = as.integer(as.numeric(User_Score)*10))
+```
+
+Next we will examine the blank Developers in the data:
+
+```{r dev check, echo=FALSE}
+# next we will look at blank developers
+vgs %>% filter(is.na(Developer)) %>% head(5) %>% select(Name,Developer,Publisher) %>% knitr::kable()
+```
+
+As with the entries with blank Publishers before these appear to be legitimate data points and some are quite famous. The original *Super Mario Bros.* for example was developed by in in-house Nintendo studio. We will use the Publisher as a proxy for the Developer in this case and fill in the missing Developer values in with the same value as Publisher. This is not entirely accurate to life but is a close enough approximation for our model.
+
+Let's check our counts for blank data again and see how much progress has been made:
+
+```{r dev clean, echo=FALSE}
+# many of these entries are quite famous and look to be self published
+# we will assume missing developer fields are self published for our analysis 
+vgs <- vgs %>% mutate(Developer = coalesce(Developer,Publisher))
+# check for counts
+data.frame(sapply(vgs, function(y) sum(is.na(y)))) %>%
+    filter(sapply.vgs..function.y..sum.is.na.y...>0) %>%
+    rename("#_of_NAs" = "sapply.vgs..function.y..sum.is.na.y...") %>%
+    knitr::kable()
+# Developer is fully populated now
+```
+
+All but Rating have been sufficiently cleaned. Looking at a list of unique ratings:
+
+```{r ratings, echo=FALSE}
+# examine ratings values
+vgs %>% group_by(Rating) %>% summarize(Count = n()) %>% knitr::kable()
+# these match common ESRB ratings but some are missing and some are out of date
+# research here: https://en.wikipedia.org/wiki/Entertainment_Software_Rating_Board
+# research reveals K-A and E are the rating under different names
+# we will assume blanks are unrated and mark them as "UR"
+```
+
+We can see these match ESRB ratings, a common industry standard that has been in use for decades. Performing some further research on each of these ratings values yields some additional information:
+
+| Symbols  | Rating               | Years Active            |
+|----------|----------------------|-------------------------|
+| **EC**   | Early Childhood      | 1994-2018 Rolled into E |
+| **K-A**  | Kids to Adults       | 1994-1998 Rolled into E |
+| **T**    | Teen                 | 1994-present            |
+| **M**    | Mature               | 1994-present            |
+| **AO**   | Adults Only          | 1994-present            |
+| **E**    | Everyone             | 1998-present            |
+| **E10+** | Everyone 10 and over | 2005-present            |
+| **RP**   | Rating Pending       | 1994-present            |
+
+Several of our ratings categories have very few data points and we can see from the history of these ratings that K-A and EC could easily be rolled into E as they were for the official ratings in 1998 and 2018 respectively. For AO and RP rated titles we have very few data points, examing further:
+
+```{r rating AO or RP, echo=FALSE}
+# find rating of RP or AO
+vgs %>% filter(Rating=="RP"|Rating=="AO") %>% select (Name, Genre, Publisher, Rating) %>% knitr::kable()
+```
+
+*Grand Theft Auto: San Andreas* was famously revised from M to an AO rating temporarily after a mod for the game was release that unlocked explicit material unused in the unmodified game. After some back and forth this content was eventually removed from distributed copies and the original M rating was restored. We will make the same modification hear to better model the true outcome.
+
+Digging further into other Strategy titles published by Paradox Interactive similar to *Supreme Ruler: Cold War*:
+
+```{r rating RP, echo=FALSE}
+vgs %>% filter(Publisher=="Paradox Interactive",Genre == "Strategy") %>% select(Name, Genre, Rating) %>% knitr::kable()
+```
+
+We see mostly titles rated T for Teen with a handful making it under the T for Teen bar after the E10+ rating is introduced. We will use T for this RP title to approximate the rating it would have received.
+
+Finally we will need a rating to assign the many unrated titles there are thousands and we have little to go on so for the sake of expediency we will lump them together as Unrated designated as "UR." The ESRB is primarily a western market organization so the expectation is these titles will effectively be a group for everything not released in those markets.
+
+```{r clean ratings, echo=FALSE}
+# we will assume blanks are unrated and mark them as "UR"
+# we will replace EC and K-A ratings with E ratings
+vgs <- vgs %>% mutate(Rating = as.factor(coalesce(str_replace_all(Rating, c("K-A"="E","EC"="E","AO"="M","RP"="T")),"UR")))
+# check counts
+data.frame(sapply(vgs, function(y) sum(is.na(y)))) %>%
+    filter(sapply.vgs..function.y..sum.is.na.y...>0) %>%
+    rename("#_of_NAs" = "sapply.vgs..function.y..sum.is.na.y...") %>%
+    knitr::kable()
+# ratings fully populated
+```
+
+A final check of our data shows we have cleaned up all the NAs from fields we intend to use in our models. Lets take a deeper look at the shape of our data next.
+
+### Data Visualization
+
+Let us explore our data set with some graphical representations to get a better idea of the data's shape and which fields may be useful for our work.  We will examine each potential predictive factor as well as the global sales figures we are trying to predict to see if any insights can be gleaned.
+
+#### Sales by Year of Release
+
+Starting with the number of titles released per year in our data set which we can see ploted over time here:
+
+```{r counts per year, echo=FALSE, out.width="75%",fig.align = 'center'}
+# year effect on data quality start with counts by year
+vgs %>% group_by(Year_of_Release) %>% summarize(count = n()) %>% 
+  ggplot(aes(x = Year_of_Release, y = count, color = "Year_of_Release")) +
+  theme_solarized(base_size = 14) +
+  ggtitle("Games Released per Year") +
+  geom_line(show.legend=FALSE, size = 1.25) +
+  theme(axis.title = element_blank())
+```
+
+We can see that very little data exists in our data set earlier than 1993 and for 1993-2000 or so the data in the set is relatively low compared to later years. How much does this impact the quality of our data? We will graph the average sales by year below on the left with error bars to determine how the data quality is affected by the small sample sizes. As expected the early years are spotty and have wide variances in the data. Prior to 1997 the error bars ar e quite large compared to later years which are extremely compressed on this graph due to the scale required for the early years. The since the further back the data goes the less likely it is a good predictor for future forecasts and the quality of the data in this period is low we will discard the data from 1997 or earlier.
+
+```{r average sales per year with error bars cleaning noisy data, echo=FALSE, out.width="50%"}
+# now sales by year with averages and error bars
+vgs %>% group_by(Year_of_Release) %>% 
+  summarize(n = n(), 
+            Average_Sales = mean(Global_Sales), 
+            SE = sd(Global_Sales)/sqrt(n()))  %>%
+  ggplot(aes(x = Year_of_Release, y = Average_Sales, 
+             ymin = Average_Sales - 2*SE, ymax = Average_Sales + 2*SE)) +
+  ggtitle("Average Sales per Year with Error Bars") +
+  geom_point(color="#6c71c4") +
+  geom_errorbar(color="#6c71c4") +
+  theme_solarized(base_size = 14) +
+  theme(axis.title = element_blank())
+# prior to 1997 sample size small and noisy bad for our model
+vgs <- vgs %>% filter(Year_of_Release >= 1997)
+# results of cleaning
+vgs %>% group_by(Year_of_Release) %>% 
+  summarize(n = n(), 
+            Average_Sales = mean(Global_Sales), 
+            SE = sd(Global_Sales)/sqrt(n()))  %>%
+  ggplot(aes(x = Year_of_Release, y = Average_Sales, 
+             ymin = Average_Sales - 2*SE, ymax = Average_Sales + 2*SE)) +
+  ggtitle("Average Sales per Year with Error Bars") +
+  geom_point(color="#6c71c4") +
+  geom_errorbar(color="#6c71c4") +
+  theme_solarized(base_size = 14) +
+  theme(axis.title = element_blank())
+```
+
+Looking at the results after cleaning on the right, we can see our y-axis has tightened up considerably and all years are showing similar sizes of variance. This should make for a more accurate model.
+
+#### Genre
+
+The first variable we will examine is Genre. Here we will chart the total sales by genre first globally and then a chart broken down by region.
+
+```{r Genre Visualization, echo=FALSE, out.width="50%"}
+# Genre effect on sales plot total global sales by genre
+plot_gb_by_genre <- vgs %>%
+  group_by(Genre) %>%
+  summarise(Global = sum(Global_Sales)) %>%
+  ggplot(aes(Global,Genre,fill=Global)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Global Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_gb_by_genre
+# Sales appear to vary significantly by genre how to region affect this
+# create the same plot for each of the 4 regions
+plot_na_by_genre <- vgs %>%
+  group_by(Genre) %>%
+  summarise(NA_ = sum(NA_Sales)) %>%
+  ggplot(aes(NA_,Genre,fill=NA_)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("North America Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_eu_by_genre <- vgs %>%
+  group_by(Genre) %>%
+  summarise(EU = sum(EU_Sales)) %>%
+  ggplot(aes(EU,Genre,fill=EU)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Europe Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_jp_by_genre <- vgs %>%
+  group_by(Genre) %>%
+  summarise(JP = sum(JP_Sales)) %>%
+  ggplot(aes(JP,Genre,fill=JP)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Japan Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_ot_by_genre <- vgs %>%
+  group_by(Genre) %>%
+  summarise(Other = sum(Other_Sales)) %>%
+  ggplot(aes(Other,Genre,fill=Other)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Other Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+# compare all the regional plots
+grid.arrange(plot_na_by_genre,plot_eu_by_genre,plot_jp_by_genre,plot_ot_by_genre)
+# similar for NA/Eu/Other but JP significantly different
+```
+
+We can see some patterns here in what regions of the world tend to purchase which genres of games. Japan heavily favors Role-Playing games while the rest of the world prefers Action games. Sports and Shooters are also very popular outside of Japan. The European region also has a slightly above average preference for Racing games.
+
+#### Platform
+
+Next we will examine is Genre. Again we will chart the total sales by platform first globally and then a chart broken down by region.
+
+```{r platform visualization, echo=FALSE, out.width="50%"}
+# Platform effect on sales plot total global sales by platform
+plot_gb_by_platform <- vgs %>%
+  group_by(Platform) %>%
+  summarise(Global = sum(Global_Sales)) %>%
+  ggplot(aes(Global,Platform,fill=Global)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Global Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_gb_by_platform
+# Sales appear to vary significantly by Platform how to region affect this
+# create the same plot for each of the 4 regions
+plot_na_by_platform <- vgs %>%
+  group_by(Platform) %>%
+  summarise(Global = sum(Global_Sales), NA_ = sum(NA_Sales)) %>%
+  top_n(.,10,Global) %>%
+  ggplot(aes(NA_,Platform,fill=NA_)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("North America Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_eu_by_platform <- vgs %>%
+  group_by(Platform) %>%
+  summarise(Global = sum(Global_Sales), EU = sum(EU_Sales)) %>%
+  top_n(.,10,Global) %>%
+  ggplot(aes(EU,Platform,fill=EU)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Europe Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_jp_by_platform <- vgs %>%
+  group_by(Platform) %>%
+  summarise(Global = sum(Global_Sales), JP = sum(JP_Sales)) %>%
+  top_n(.,10,Global) %>%
+  ggplot(aes(JP,Platform,fill=JP)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Japan Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_ot_by_platform <- vgs %>%
+  group_by(Platform) %>%
+  summarise(Global = sum(Global_Sales), Other = sum(Other_Sales)) %>%
+  top_n(.,10,Global) %>%
+  ggplot(aes(Other,Platform,fill=Other)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Other Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+# compare all the regional plots
+grid.arrange(plot_na_by_platform,plot_eu_by_platform,plot_jp_by_platform,plot_ot_by_platform)
+# again significant differences by region based on platform
+```
+
+Again we see distinct regional patterns in Platform adoption. Japan heavily prefers the DS. Outside Japan the PS2 enjoys wide adoption everywhere, the Wii is popular in US and the EU but not as popular outside those regions, and the Xbox 360 is most popular in the US with the PS2 and PS3 edging above it in Europe. Japan also appears to be less enthusiastic about the latest Play Station generation with PS3 titles still lagging behind original Play Station titles.
+
+#### Rating
+
+Next we examine rating again breaking down the results globally and then by region.
+
+```{r rating visualization, echo=FALSE, out.width="50%"}
+# Rating effect on sales plot average global sales by genre
+plot_gb_by_Rating <- vgs %>%
+  group_by(Rating) %>%
+  summarise(Global = sum(Global_Sales)) %>%
+  ggplot(aes(Global,Rating,fill=Global)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Global Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_gb_by_Rating
+# Sales appear to vary significantly by Rating how to region affect this
+# create the same plot for each of the 4 regions
+plot_na_by_Rating <- vgs %>%
+  group_by(Rating) %>%
+  summarise(NA_ = sum(NA_Sales)) %>%
+  ggplot(aes(NA_,Rating,fill=NA_)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("North America Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_eu_by_Rating <- vgs %>%
+  group_by(Rating) %>%
+  summarise(EU = sum(EU_Sales)) %>%
+  ggplot(aes(EU,Rating,fill=EU)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Europe Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_jp_by_Rating <- vgs %>%
+  group_by(Rating) %>%
+  summarise(JP = sum(JP_Sales)) %>%
+  ggplot(aes(JP,Rating,fill=JP)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Japan Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+plot_ot_by_Rating <- vgs %>%
+  group_by(Rating) %>%
+  summarise(Other = sum(Other_Sales)) %>%
+  ggplot(aes(Other,Rating,fill=Other)) +
+  theme_solarized(base_size = 14) +
+  geom_col(show.legend = FALSE) +
+  ggtitle("Other Sales") +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank())
+# compare all the regional plots
+grid.arrange(plot_na_by_Rating,plot_eu_by_Rating,plot_jp_by_Rating,plot_ot_by_Rating)
+# Heavy preference in all regions for E rated games
+# 10+ is a new rating which explains the under-representation
+```
+
+Regional patterns in preference for specific age ratings for games appears to be laregely non-existant outside of Japan with almost every region seeing a distinct pattern of E, M and T as the top 3. Keep in mind when reviewing these numbers that E10+ is still relatively new so the numbers have not caught up with other ratings. Inside Japan we see the mystery of our large numbers of unrated games revealed: most of Japan's games sales in this data set lack ESRB ratings. This makes sense because the ESRB primarily operates in the US and Canada. In the EU they work closely with PEGI which uses a nearly iddentical rating system of 3, 7, 12, 16, 18 maping approximately onto E, E10+, T, M, and AO. So the data set has ratings for those titles as well.
+
+#### Developer
+
+Next we examine how possible Developer may affect sales. This could be a name brand or reputation based effect. We can see a heavy leftward bias in our chart with some extreme outliers pulling the x-axis scale very far to the right with very few data points.
+
+```{r Developer visualization, echo=FALSE, out.width="75%",fig.align = 'center'}
+# examine averages by developer
+vgs %>% group_by(Developer) %>%
+  summarize(average_sales = mean(Global_Sales)) %>%
+  ggplot(aes(average_sales)) +
+  geom_histogram(bins=129,color = "#073642",fill="#dc322f") +
+  ggtitle("Averge Sales by Developer") +
+  theme_solarized(base_size=16, light=FALSE) +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank())
+# some very big outliers top 10 devs
+vgs %>% group_by(Developer) %>%
+  summarize(average_sales = mean(Global_Sales)) %>%
+  select(Developer, average_sales) %>%
+  top_n(10,average_sales) %>%
+  arrange(desc(average_sales)) %>%
+  knitr::kable()
+```
+
+Checking the top 10 Developers by average sales we can see some clear outliers at the top of the list here with very popular titles getting tens of millions of units sold while the average game according to our chart sells less than a million units. This suggests a scale adjustment is in order, let's try log10 and see how things look.
+
+```{r Developer log 10, echo=FALSE, out.width="75%",fig.align = 'center'}
+# try a log 10 scale 
+vgs %>% group_by(Developer) %>%
+  summarize(average_sales = mean(Global_Sales)) %>%
+  ggplot(aes(average_sales)) +
+  geom_histogram(bins=129,color = "#073642",fill="#dc322f") +
+  ggtitle("Averge Sales by Developer (Log 10 Scale)") +
+  scale_x_log10() +
+  theme_solarized(base_size=16, light=FALSE) +
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank())
+# near 0 appears fairly normally distributed with a long tail skewing right
+```
+
+After a log10 scale adjustment we can see our distribution now looks a little closer to roughly normal by still skews a bit left. This should make guessing an average much easier.
+
+#### Publisher
+
+Next we examine how possible Publisher may affect sales. This could be a name brand or reputation based effect. Publishers are also typically responsible for the marketing of a game so this could also reflect the differences in marketing styles between the Publishers.
+
+```{r Publisher visualization, echo=FALSE, out.width="75%", fig.align = 'center'}
+# examine averages by publishers
+vgs %>% group_by(Publisher) %>%
+  summarize(average_sales = mean(Global_Sales)) %>%
+  ggplot(aes(average_sales)) +
+  geom_histogram(bins=29,color = "#073642",fill="#268bd2") +
+  ggtitle("Averge Sales by Publisher") +
+  theme_solarized(base_size=16, light=FALSE) +
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank())
+```
+
+Again we see a heavy leftward bias in our sales figures with some extreme outliers pulling the x-axis scale very far to the right. Checking the top 10 Publishers by average sales per game:
+
+```{r top 10 Publishers, echo=FALSE}
+# again we see a right skew but not nearly as extreme as with developers
+vgs %>% group_by(Publisher) %>%
+  summarize(average_sales = mean(Global_Sales)) %>%
+  select(Publisher, average_sales) %>%
+  top_n(10,average_sales) %>%
+  arrange(desc(average_sales)) %>%
+  knitr::kable()
+# top 10 values are much much lower than developers
+```
+
+Shows a similar story to Developers with a couple of outliers at the top averaging several million units sold per game. Lets try a log10 adjustment as we did before.
+
+```{r Publisher log 10, echo=FALSE, out.width="75%", fig.align = 'center'}
+# try a log 10 scale again
+vgs %>% group_by(Publisher) %>%
+  summarize(average_sales = mean(Global_Sales)) %>%
+  ggplot(aes(average_sales)) +
+  geom_histogram(bins=29,color = "#073642",fill="#268bd2") +
+  ggtitle("Averge Sales by Publisher (Log 10 Scale)") +
+  scale_x_log10() +
+  theme_solarized(base_size=16, light=FALSE) +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank())
+# less normal here than developers but a slight bit of rounding
+```
+
+After a log10 scale adjustment we can see our distribution now looks a little closer to roughly normal but still skews a bit left. Still an improvement over the unsealed results and should be easier to guess a mean for.
+
+#### Global Sales Distribution
+
+Lets examine the distribution of Global Sales directly.
+
+```{r global sales distribution, echo=FALSE, out.width="75%", fig.align = 'center'}
+# check overall distribution of sales
+vgs %>% 
+  ggplot(aes(Global_Sales)) +
+  geom_histogram(bins=25,color = "#073642",fill="#dc322f") +
+  ggtitle("Overall Sales Distribution") +
+  theme_solarized(base_size=16, light=FALSE) +
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank())
+```
+
+Again we see a pretty tight grouping near 0 with very few data points skewing the x axis to the right considerably. Applying a log10 scale:
+
+```{r global sales log10, echo=FALSE, out.width="75%", fig.align = 'center'}
+# these appear very tightly grouped around 0 let's log adjust again
+vgs %>% 
+  ggplot(aes(Global_Sales)) +
+  geom_histogram(bins=25,color = "#073642",fill="#dc322f") +
+  ggtitle("Overall Sales Distribution (Log 10 Scale") +
+  scale_x_log10() +
+  theme_solarized(base_size=16, light=FALSE) +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank())
+# this appears much more normally distributed we will log adjust our prices
+```
+
+Much closer to a normal distribution now. Still a left skew but much less pronounced. This should make the data easier to model with a mean based method. We will take this conclusion in account and log adjust our Global Sales before building our models.
+
+## Models
+
+After examining our data we have identified Platform, Year_of_Release, Genre, Publisher, Developer, Rating as potential predictors and that our sale figures need a logarithmic adjustment before building our models. We will apply that adjustment and eliminate our unused columns then cut our data set into 2 groups, a 90% train set and a 10% validation set. The validation set will only be used to check the final results of the model and not for training or cross validation. For cross validation we will further divide our train set into an 80% train set and a 20% test set. This will allow us to check how well our model is performing during the creation process as well as tune our lambda for regularization of the linear model and the mtry, the number of variables randomly sampled as candidates at each tree split, of our random forest model. During our analysis we will check our progress using a Root Mean Squared Error function.
+
+```{r create data sets, echo=TRUE, warning=FALSE}
+# identified possible predictors: Platform, Year_of_Release, Genre, Publisher, Developer, Rating
+# identified sales needed a log10 adjustment
+vgs <- vgs %>% mutate(Global_Sales = log10(Global_Sales)) %>% select(2,3,4,5,15,16,10)
+
+# data for revenue prediction model
+# sales_validation set will be 10% of vgs data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = vgs$Global_Sales, times = 1, p = 0.1, list = FALSE)
+sales_train <- vgs[-test_index,]
+temp <- vgs[test_index,]
+
+# Make sure all predictors in sales_validation set are also in sales_train set
+sales_validation <- temp %>% 
+  semi_join(sales_train, by = "Platform") %>%
+  semi_join(sales_train, by = "Year_of_Release") %>%
+  semi_join(sales_train, by = "Genre") %>%
+  semi_join(sales_train, by = "Publisher") %>%
+  semi_join(sales_train, by = "Developer") %>%
+  semi_join(sales_train, by = "Rating")
+
+# Add rows removed from sales_validation set back into sales_train set
+removed <- anti_join(temp, sales_validation, by = c("Platform", "Year_of_Release", "Genre", "Publisher", "Developer", "Rating", "Global_Sales"))
+sales_train <- rbind(sales_train, removed)
+
+# divide sales_train into cross validation and train tests
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = sales_train$Global_Sales, times = 1, p = 0.2, list = FALSE)
+sales_train_cv <- sales_train[-test_index,]
+temp <- sales_train[test_index,]
+
+# Make sure all predictors in sales_test_cv set are also in sales_train_cv set
+sales_test_cv <- temp %>% 
+  semi_join(sales_train_cv, by = "Platform") %>%
+  semi_join(sales_train_cv, by = "Year_of_Release") %>%
+  semi_join(sales_train_cv, by = "Genre") %>%
+  semi_join(sales_train_cv, by = "Publisher") %>%
+  semi_join(sales_train_cv, by = "Developer") %>%
+  semi_join(sales_train_cv, by = "Rating")
+
+# Add rows removed from sales_test_cv set back into sales_train_cv set
+removed <- anti_join(temp, sales_test_cv, by = c("Platform", "Year_of_Release", "Genre", "Publisher", "Developer", "Rating", "Global_Sales"))
+sales_train_cv <- rbind(sales_train_cv, removed)
+
+# dump extra variables
+rm(test_index,temp,removed)
+```
+
+```{r create RMSE function}
+# create RMSE function to evaluate model results
+rmse <- function(x, y)
+  {
+  sqrt(mean((x - y)^2))
+  }
+```
+
+### Model 1: Linear Regression with Regularization
+
+We begin by guessing a simple mean of the Global Sales figures for each entry.
+
+```{r Just the mean, echo=FALSE}
+# model 1, use mean as prediction, creation
+sales_mu <- mean(sales_train_cv$Global_Sales)
+# RMSE of guessing mean
+naive_rmse <- rmse(sales_test_cv$Global_Sales, sales_mu )
+# add naive_rmse to a table of rmse results
+rmse_results <- tibble(Method = "Just the average", RMSE = naive_rmse)
+# show results
+rmse_results %>% knitr::kable()
+```
+
+This gives us a baseline RMSE of `r naive_rmse` to compare our models against.
+
+#### Developer
+
+First we will build a model using Developer as a predictor and check RMSE.
+
+```{r linear developer, echo=FALSE}
+# add dev effect to model
+dev_avgs <- sales_train_cv %>% 
+  group_by(Developer) %>% 
+  summarize(b_dev = mean(Global_Sales - sales_mu))
+# cross validate
+model_1_rmse <- (sales_test_cv %>%
+                   left_join(dev_avgs,by='Developer') %>%
+                   mutate(pred = sales_mu + b_dev) %>%
+                   summarize(rmse(.$pred,.$Global_Sales)))[1,1]
+# add row to results table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Dev Model",
+                                 RMSE = model_1_rmse ))
+# show results
+rmse_results %>% knitr::kable()
+```
+
+We immediately see an improvement to `r model_1_rmse`.
+
+#### Publisher
+
+Next we add Publisher on top of the existing model.
+
+```{r linear publisher, echo=FALSE}
+# add publisher of release to model 
+publisher_avgs <- sales_train_cv %>% 
+  left_join(dev_avgs,by='Developer') %>%
+  group_by(Publisher) %>% 
+  summarize(b_pub = mean(Global_Sales - sales_mu - b_dev))
+# cross validate
+model_2_rmse <- (sales_test_cv %>%
+                   left_join(dev_avgs,by='Developer') %>%
+                   left_join(publisher_avgs,by='Publisher') %>%
+                   mutate(pred = sales_mu + b_dev + b_pub) %>%
+                   summarize(rmse(.$pred,.$Global_Sales)))[1,1]
+# add row to results table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Dev + Pub Model",
+                                 RMSE = model_2_rmse ))
+# show results
+rmse_results %>% knitr::kable() 
+```
+
+Another improvement to `r model_2_rmse` but a much smaller jump this time.
+
+#### Genre
+
+Adding Genre as a variable on top of the existing model.
+
+```{r linear genre, echo=FALSE}
+# add genre of title to model
+genre_avgs <- sales_train_cv %>%
+  left_join(dev_avgs,by='Developer') %>%
+  left_join(publisher_avgs,by='Publisher') %>% 
+  group_by(Genre) %>% 
+  summarize(b_g = mean(Global_Sales - sales_mu - b_dev - b_pub))
+# cross validate
+model_3_rmse <- (sales_test_cv %>%
+                   left_join(dev_avgs,by='Developer') %>%
+                   left_join(publisher_avgs,by='Publisher') %>%
+                   left_join(genre_avgs,by='Genre') %>%
+                   mutate(pred = sales_mu + b_dev + b_pub + b_g) %>%
+                   summarize(rmse(.$pred,.$Global_Sales)))[1,1]
+# add row to results table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Dev + Pub + Genre Model",
+                                 RMSE = model_3_rmse ))
+# show results
+rmse_results %>% knitr::kable() 
+```
+
+Another improvement to `r model_3_rmse`
+
+#### Platform
+
+Next we add Platform as a variable on top of the existing model.
+
+```{r linear platform, echo=FALSE}
+# add platform to model
+platform_avgs <- sales_train_cv %>%
+  left_join(dev_avgs,by='Developer') %>%
+  left_join(publisher_avgs,by='Publisher') %>%
+  left_join(genre_avgs,by='Genre') %>% 
+  group_by(Platform) %>% 
+  summarize(b_plat = mean(Global_Sales - sales_mu - b_dev - b_pub - b_g))
+# cross validate
+model_4_rmse <- (sales_test_cv %>%
+                   left_join(dev_avgs,by='Developer') %>%
+                   left_join(publisher_avgs,by='Publisher') %>%
+                   left_join(genre_avgs,by='Genre') %>% 
+                   left_join(platform_avgs,by='Platform') %>%
+                   mutate(pred = sales_mu + b_dev + b_pub + b_g + b_plat) %>%
+                   summarize(rmse(.$pred,.$Global_Sales)))[1,1]
+# add row to results table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Dev + Pub + Genre + Platform Model",
+                                 RMSE = model_4_rmse ))
+# show results
+rmse_results %>% knitr::kable() 
+```
+
+Another improvement to `r model_4_rmse`
+
+#### Rating
+
+Next we add Rating to our model.
+
+```{r inear rating, echo=FALSE}
+# rating to model 1.5858
+rating_avgs <- sales_train_cv %>%
+  left_join(dev_avgs,by='Developer') %>%
+  left_join(publisher_avgs,by='Publisher') %>%
+  left_join(genre_avgs,by='Genre') %>% 
+  left_join(platform_avgs,by='Platform') %>% 
+  group_by(Rating) %>% 
+  summarize(b_rt = mean(Global_Sales - sales_mu - b_dev - b_pub - b_g - b_plat))
+# cross validate
+model_5_rmse <- (sales_test_cv %>%
+                   left_join(dev_avgs,by='Developer') %>%
+                   left_join(publisher_avgs,by='Publisher') %>%
+                   left_join(genre_avgs,by='Genre') %>% 
+                   left_join(platform_avgs,by='Platform') %>% 
+                   left_join(rating_avgs,by='Rating') %>%
+                   mutate(pred = sales_mu + b_dev + b_pub + b_g + b_plat + b_rt) %>%
+                   summarize(rmse(.$pred,.$Global_Sales)))[1,1]
+# add rmse to table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Dev + Pub + Genre + Platform + Rating Model",
+                                 RMSE = model_5_rmse ))
+# show results
+rmse_results %>% knitr::kable() 
+```
+
+Another improvement to `r model_5_rmse`
+
+#### Year of Release
+
+Our final predictor, the Year of Release, will be added to the model.
+
+```{r linear year of release, echo=FALSE}
+# adding year of release to the model 5
+year_avgs <- sales_train_cv %>%
+  left_join(dev_avgs,by='Developer') %>%
+  left_join(publisher_avgs,by='Publisher') %>%
+  left_join(genre_avgs,by='Genre') %>% 
+  left_join(platform_avgs,by='Platform') %>%
+  left_join(rating_avgs,by='Rating') %>%
+  group_by(Year_of_Release) %>% 
+  summarize(b_yr = mean(Global_Sales - sales_mu - b_dev - b_pub - b_g - b_plat - b_rt))
+# cross validate
+model_6_rmse <- (sales_test_cv %>%
+                   left_join(dev_avgs,by='Developer') %>%
+                   left_join(publisher_avgs,by='Publisher') %>%
+                   left_join(genre_avgs,by='Genre') %>% 
+                   left_join(platform_avgs,by='Platform') %>% 
+                   left_join(year_avgs,by='Year_of_Release') %>%
+                   left_join(rating_avgs,by='Rating') %>%
+                   mutate(pred = sales_mu + b_dev + b_pub + b_g + b_plat + b_rt + b_yr) %>%
+                   summarize(rmse(.$pred,.$Global_Sales)))[1,1]
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Dev + Pub + Genre + Platform + Rating + Year Model",
+                                 RMSE = model_6_rmse ))
+# final table
+rmse_results %>% knitr::kable()
+```
+
+Yielding a final RMSE of `r model_6_rmse` with each predictor improving the model.
+
+#### Regularization
+
+Next we will apply regularization, a technique that prevents over-fitting and pushes the model back towards the mean again. We will use our cross validation set to tune our lambda, the factor we will add to each group to regularize them.
+
+```{r linear regularization, echo=FALSE, out.width="75%", fig.align = 'center'}
+# we see the best model is model 6 let us apply regularization
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(sales_train_cv$Global_Sales)
+  b_dev <- sales_train_cv %>%
+    group_by(Developer) %>%
+    summarize(b_dev = sum(Global_Sales - mu)/(n()+l))
+  b_pub <- sales_train_cv %>% 
+    left_join(b_dev, by="Developer") %>%
+    group_by(Publisher) %>%
+    summarize(b_pub = sum(Global_Sales - b_dev - mu)/(n()+l))
+  b_g <- sales_train_cv %>%
+    left_join(b_dev, by="Developer") %>%
+    left_join(b_pub, by="Publisher") %>%
+    group_by(Genre) %>%
+    summarize(b_g = sum(Global_Sales - b_dev - b_pub - mu)/(n()+l))
+  b_plat <- sales_train_cv %>%
+    left_join(b_dev, by="Developer") %>%
+    left_join(b_pub, by="Publisher") %>%
+    left_join(b_g, by="Genre") %>%
+    group_by(Platform) %>%
+    summarize(b_plat = sum(Global_Sales - b_dev - b_pub - b_g - mu)/(n()+l))
+  b_rt <- sales_train_cv %>%
+    left_join(b_dev, by="Developer") %>%
+    left_join(b_pub, by="Publisher") %>%
+    left_join(b_g, by="Genre") %>% 
+    left_join(b_plat,by="Platform") %>%
+    group_by(Rating) %>%
+    summarize(b_rt = sum(Global_Sales - b_dev - b_pub - b_g - b_plat - mu)/(n()+l))
+  b_y <- sales_train_cv %>% 
+    left_join(b_dev, by = "Developer") %>%
+    left_join(b_pub, by = "Publisher") %>%
+    left_join(b_g, by = "Genre") %>%
+    left_join(b_plat, by = "Platform") %>%
+    left_join(b_rt, by = "Rating") %>%
+    group_by(Year_of_Release) %>%
+    summarize(b_y = sum(Global_Sales - b_dev - b_pub - b_g - b_plat - b_rt - mu)/(n()+l))
+  predicted_global_sales <- 
+    sales_test_cv %>% 
+    left_join(b_dev, by = "Developer") %>%
+    left_join(b_pub, by = "Publisher") %>%
+    left_join(b_g, by = "Genre") %>%
+    left_join(b_plat, by = "Platform") %>%
+    left_join(b_rt, by = "Rating") %>%
+    left_join(b_y, by = "Year_of_Release") %>%
+    mutate(pred = mu + b_dev + b_pub + b_g + b_plat + b_rt + b_y) %>%
+    .$pred
+  return(RMSE(predicted_global_sales, sales_test_cv$Global_Sales))
+})
+# plot to visualize effect of lambda on RMSE
+as.data.frame(list(lamdas = lambdas,rmses = rmses)) %>%
+  ggplot(aes(x=lamdas,y=rmses)) + 
+  geom_point(show.legend=FALSE,color = "#6c71c4") +
+  theme_solarized(base_size = 14)
+# store best lambda and add newest RMSE to table of results
+lambda <- lambdas[which.min(rmses)]
+# store best rmse from regularization to table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Regularized Dev + Pub + Genre + Platform + Year Model",  
+                                 RMSE = min(rmses)))
+# full rmse table from model building
+rmse_results %>% knitr::kable()
+```
+
+Here we can see the results of our cross validation pass where different levels of lambda result in different RMSE results. We pick the best lambda, `r lambda`, from the bunch, store the RMSE to our table, and compare it to the earlier iterations of the model and see another improvement to `r min(rmses)`.
+
+### Model 2: Random Forests
+
+Our next model will use a technique called Random Forests. Random forests creates a large number of decision trees to model the prediction data and then selects the average result from all the predictions produced to arrive at a final prediction for each entry. Again we will measure the effectiveness of this model using the same Root Mean Squared Error function as before so the two models can be compared head to head.
+
+#### Convert Categories with a Hash
+
+Before we can begin building our Random Forest we need to convert some of our text based categorical data into a hash the algorithm can handle. For our Developer and Publisher fields there are two many categories for the algorithm to interpret as categorical data so this will allow us to still use them as predictors.
+
+```{r hash characters, echo=TRUE}
+# lets try another model, random forests
+# start with hashing of developer and publisher names 
+# because there are to many categories for RF
+sales_train_cv <- sales_train_cv %>%
+  rowwise() %>%
+  mutate(digest_dev = digest(Developer, algo = 'md5'), 
+         digest_pub = digest(Publisher,algo='md5'),
+         digest2int_dev = digest2int(digest_dev),
+         digest2int_pub = digest2int(digest_pub)) %>%
+  as.data.frame(.)
+sales_test_cv <- sales_test_cv %>%
+  rowwise() %>%
+  mutate(digest_dev = digest(Developer, algo = 'md5'), 
+         digest_pub = digest(Publisher,algo='md5'),
+         digest2int_dev = digest2int(digest_dev),
+         digest2int_pub = digest2int(digest_pub)) %>%
+  as.data.frame(.)
+sales_validation <- sales_validation %>%
+  rowwise() %>%
+  mutate(digest_dev = digest(Developer, algo = 'md5'), 
+         digest_pub = digest(Publisher,algo='md5'),
+         digest2int_dev = digest2int(digest_dev),
+         digest2int_pub = digest2int(digest_pub)) %>%
+  as.data.frame(.)
+# set y
+rf_y <- sales_train_cv$Global_Sales
+# linear regression suggests Developer, Publisher, Genre, 
+# Platform, Rating, and Year_of_Release as variables
+rf_x <- sales_train_cv %>% 
+  select(digest2int_dev,digest2int_pub,Genre,Platform,Rating,Year_of_Release)
+```
+
+#### Training
+
+Now we know from our linear model that all of the selected predictors have some predictive power so for random forests we will skip to the end and include them all at the start and begin building our model. At the early stages we will limit the sample size the model uses when drawing. This will speed up processing. After an initial run we will examine the effect of the number of trees on the error.
+
+```{r rf train, warning=FALSE, out.width="75%", fig.align = 'center'}
+# set seeed for repeatability
+set.seed(1, sample.kind="Rounding")
+# train the random forest, limit sample size to improve performance
+train_rf <- randomForest(rf_x,rf_y,sampsize=6500)
+# calculate RMSE 
+rf_rmse <- rmse(predict(train_rf, sales_test_cv),sales_test_cv$Global_Sales)
+# plot train set to examine number of trees for cv
+as.data.frame(train_rf$mse) %>% mutate(Error = train_rf$mse, num_trees=row_number()) %>%
+  ggplot(aes(x=num_trees,y=Error,color = "num_trees")) +
+  theme_solarized(base_size = 14) +
+  ggtitle("Mean Squared Error vs # of Trees") +
+  geom_line(show.legend=FALSE, size = 1.25) +
+  theme(axis.title = element_blank())
+```
+
+We can see from the chart that the error function sharply drops and stabilizes at around 100-150 trees. We can use this as a limit to help speed up the cross validation pass on our tuning parameter, mtry. Mtry is the number of variables randomly sampled each time the data is split for branches of our decision trees. The default value, used here, is the number of predictors divided by 3. We have 6 predictors so our mtry is 2. We will see if we can do better by selecting mtry manually using cross validation similar to the process we used to pick lambda earlier.
+
+#### Tune Mtry
+
+```{r CV mtry, echo=TRUE, warning=FALSE, out.width="75%", fig.align = 'center'}
+# use cross validation to choose mtry
+mtries <- 1:6
+rmses <- sapply(mtries, function(n)
+{
+  set.seed(1, sample.kind="Rounding")
+  cv_tune <- randomForest(rf_x,rf_y,
+                          sampsize=6500,
+                          ntree=100,
+                          mtry = n)  
+  return(rmse(predict(cv_tune, sales_test_cv),sales_test_cv$Global_Sales))
+})
+# plot to visualize effect of mtry on RMSE
+as.data.frame(list(mtries = mtries,rmses = rmses)) %>%
+  ggplot(aes(x=mtries,y=rmses)) + 
+  geom_point(show.legend=FALSE,color = "#6c71c4") +
+  theme_solarized(base_size = 14)
+# store best mtry
+mt <- mtries[which.min(rmses)]
+```
+
+Here we test all possible values of mtry, 1-6, against the data with the number of trees limited to 150 to help speed up processing. We calculate the RMSE of each value of mtry and then pick the mtry value with the best result. After cross validation our best mtry value was `r mt`.
+
+#### Final Random Forest Model
+
+Finally it is time to take our model and tuned variable and build the best random forest model we can. We lift the sample size limits and raise the number of trees to 2,500 here to improve model. As a result this calculation will take several minutes.
+
+```{r Build Final RF Model, echo=TRUE, warning=FALSE}
+# lift sample size and raise ntree limits for final tune
+# this will take several minutes
+set.seed(1, sample.kind="Rounding")
+train_rf_tuned <- randomForest(rf_x,rf_y,
+                               mtry = mt,
+                               ntree=2500)
+# calculate RMSE
+rf_rmse_tuned <- rmse(predict(train_rf_tuned, sales_test_cv),sales_test_cv$Global_Sales)
+# store rmse from final rf model to table
+rmse_results <- bind_rows(rmse_results,
+                          tibble(Method="Tuned Random forest Model",  
+                                 RMSE = min(rmses)))
+# full rmse table from model building
+rmse_results %>% knitr::kable()
+```
+
+Our final RMSE from Random Forset gives a RMSE against the cross validation test set of `r min(rmses)`. A small improvement over our best linear model with regularization.
+
+# Results
+
+With both models build and tuned we will take them back to the hold-out validation set for the first time to guage their performance
+
+## Linear Regression with Regularization Validation and Final RMSE
+
+First we calculate the RMSE of guessing the average of the training set against the validation set as a baseline to compare against. Then we calculate our Linear Regression with Regularization model against the full training set, use the model to predict the Validation set, and calculate a RMSE of our predictions.
+
+```{r Linear Validation RMSE, echo=TRUE}
+# with our CV complete, model and lambda set, apply model to full train set
+# mean of full train set
+mu <- mean(sales_train$Global_Sales)
+# first a naive guess of the simple mean for comparison
+final_naive_rmse <- rmse(sales_validation$Global_Sales, sales_mu )
+# add result to table
+final_rmse_results <- tibble(Method = "Just the average", RMSE = final_naive_rmse)
+# create full model on full train set with lambda
+b_dev <- sales_train %>%
+  group_by(Developer) %>%
+  summarize(b_dev = sum(Global_Sales - mu)/(n()+lambda))
+b_pub <- sales_train %>% 
+  left_join(b_dev, by="Developer") %>%
+  group_by(Publisher) %>%
+  summarize(b_pub = sum(Global_Sales - b_dev - mu)/(n()+lambda))
+b_g <- sales_train %>%
+  left_join(b_dev, by="Developer") %>%
+  left_join(b_pub, by="Publisher") %>%
+  group_by(Genre) %>%
+  summarize(b_g = sum(Global_Sales - b_dev - b_pub - mu)/(n()+lambda))
+b_plat <- sales_train %>%
+  left_join(b_dev, by="Developer") %>%
+  left_join(b_pub, by="Publisher") %>%
+  left_join(b_g, by="Genre") %>%
+  group_by(Platform) %>%
+  summarize(b_plat = sum(Global_Sales - b_dev - b_pub - b_g - mu)/(n()+lambda))
+b_rt <- sales_train %>%
+  left_join(b_dev, by="Developer") %>%
+  left_join(b_pub, by="Publisher") %>%
+  left_join(b_g, by="Genre") %>% 
+  left_join(b_plat,by="Platform") %>%
+  group_by(Rating) %>%
+  summarize(b_rt = sum(Global_Sales - b_dev - b_pub - b_g - b_plat - mu)/(n()+lambda))
+b_y <- sales_train %>% 
+  left_join(b_dev, by = "Developer") %>%
+  left_join(b_pub, by = "Publisher") %>%
+  left_join(b_g, by = "Genre") %>%
+  left_join(b_plat, by = "Platform") %>%
+  left_join(b_rt, by = "Rating") %>%
+  group_by(Year_of_Release) %>%
+  summarize(b_y = sum(Global_Sales - b_dev - b_pub - b_g - b_plat - b_rt - mu)/(n()+lambda))
+predicted_global_sales <- sales_validation %>% 
+  left_join(b_dev, by = "Developer") %>%
+  left_join(b_pub, by = "Publisher") %>%
+  left_join(b_g, by = "Genre") %>%
+  left_join(b_plat, by = "Platform") %>%
+  left_join(b_rt, by = "Rating") %>%
+  left_join(b_y, by = "Year_of_Release") %>%
+  mutate(pred = mu + b_dev + b_pub + b_g + b_plat + b_rt + b_y) %>%
+  .$pred
+# calculate final RMSE against validation set
+final_linear_rmse <- RMSE(predicted_global_sales, sales_validation$Global_Sales)
+# save final rmse to table
+final_rmse_results <- bind_rows(final_rmse_results,
+                          tibble(Method="Linear Regression with Regularization Model",
+                                 RMSE = final_linear_rmse ))
+# final rmse results table
+final_rmse_results %>% knitr::kable()
+```
+
+We get a result of "r final_linear_rmse" against the validation set, an improvement over the naive estimate.
+
+## Random Forests Validation and Final RMSE
+
+```{r RF Validation RMSE, echo=TRUE}
+## calculate final RMSE against validation set
+final_rf_rmse <- rmse(predict(train_rf_tuned, sales_validation),sales_validation$Global_Sales)
+# save final rmse to table 0.4786551
+final_rmse_results <- bind_rows(final_rmse_results,
+                                tibble(Method="RF with all varaibles",
+                                       RMSE = final_rf_rmse ))
+# final table
+final_rmse_results %>% knitr::kable()
+```
+
+Next we use our Random Forests model to guess the validation set and calculate an RMSE arriving at `r final_rf_rmse` and improvement over both the naive estimate as well as the previous model.
+
+# Conclusion
+
+We took a data set of video game sales data and used six attributes from each title to create two regression models, one linear and one random forest, that attempted to predict Global Sales. We used a root mean squared error (RMSE) loss function to evaluate these models against one another to compare how effective they were at predicting sales. In our analysis Random Forests resulted in a slightly more accurate estimate but with a significant amount of the variance still left unexplained. Still a significant improvement was made over a naive average estimate.
+
+## Limitations
+
+Many attributes of games are not captured by the variables in our model and indeed could not be known before development even begins such as reception to the visual presentation or game-play. Reviews could help with this analysis and indeed our data set does contain review scores but such scores could only be set after the development work is largely complete. The data set also stops at 2016 so the conclusions on the present day are somewhat limited. Lastly the entire premise of our regression models is to predict future sales with existing information so titles from new developers, new publishers, for new platforms, or pushing into new genres would be difficult for these models to accurately predict.
+
+## Future Work
+
+Cross referencing this data set with other sources of information the various attributes of these video game titles could yield interesting results. Information like the engine used, more detailed information on who developed the game beyond just a studio name down to a more granular level such as Head Writers, Directors, or Art Designers, or who voiced the characters in the game could also yield valuable predictive insights.
+
+# References
+
+1.  Rafael A. Irizarry (2022) [Introduction to Data Science Data Analysis and Prediction Algorithms with R](https://rafalab.github.io/dsbook/)
+2.  Rush Kirubi (2016) [Video Game Sales with Ratings](https://www.kaggle.com/datasets/rush4ratio/video-game-sales-with-ratings)
+3.  U.S. Bureau of Labor Statistics (2022) [U.S. city average -- Current -- All items less food and energy -- Monthly -- Not Seasonally Adjusted CUUR0000SA0L1E](https://www.bls.gov/)
+4.  ESRB (2022) [Entertainment Software Rating Board - Our History](https://www.esrb.org/history/)
+5.  PEGI (2022) <https://pegi.info/what-do-the-labels-mean>
+6.  RDocumentation (2022) [randomForest: Classification and Regression with Random Forest](https://www.rdocumentation.org/packages/randomForest/versions/4.7-1.1/topics/randomForest)
+7.  RDocumentation (2022) [digest: Create hash function digests for arbitrary R objects or files](https://www.rdocumentation.org/packages/digest/versions/0.6.29/topics/digest)
